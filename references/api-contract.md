@@ -1,0 +1,74 @@
+# Gateway REST API contract
+
+The skill talks to the CUA Skill Gateway over HTTPS JSON. You never call this
+directly — `scripts/cua.py` does. This is reference only.
+
+Base URL comes from `config.json`, `CUA_SKILL_API_BASE_URL`, or `--api-base-url`.
+All paths are under `/v1`.
+
+## Unified envelope
+
+Success:
+
+```json
+{ "ok": true, "request_id": "req_...", "data": { }, "error": null }
+```
+
+Error:
+
+```json
+{ "ok": false, "request_id": "req_...", "data": null,
+  "error": { "code": "TOKEN_EXPIRED", "message": "Access token expired.", "retryable": true } }
+```
+
+## Endpoints
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/v1/manifest` | none | capability declaration |
+| `POST` | `/v1/auth/device/start` | none | begin device login → `session_id`, `user_code`, `login_url`, `expires_at`, `interval` |
+| `POST` | `/v1/auth/device/poll` | none | poll → `{status: pending}` or the token set |
+| `POST` | `/v1/auth/refresh` | refresh token (body) | rotate + return a new token set |
+| `GET` | `/v1/auth/me` | access token | identity + scopes |
+| `POST` | `/v1/auth/logout` | refresh token (body) | revoke session |
+| `GET` | `/v1/ping` | access token | auth + desktop-binding check |
+| `POST` | `/v1/invocations` | access token | delegate (`{objective, wait_ms}`) |
+| `GET` | `/v1/invocations/{id}` | access token | current invocation state |
+| `POST` | `/v1/invocations/{id}/watch` | access token | wait for next state (`{wait_ms}`) |
+| `POST` | `/v1/invocations/{id}/answer` | access token | submit answer (`{answer, wait_ms}`) |
+| `POST` | `/v1/invocations/{id}/cancel` | access token | request cancellation |
+| `GET` | `/v1/desktop/access` | access token | temporary desktop access URL (default desktop) |
+| `GET` | `/v1/desktop/screenshot` | access token | screenshot of the default desktop |
+| `GET` | `/v1/invocations/{id}/desktop/access` | access token | access URL for the invocation's desktop |
+| `GET` | `/v1/invocations/{id}/desktop/screenshot` | access token | screenshot of the invocation's desktop |
+
+## Token set (device poll / refresh `data`)
+
+```json
+{
+  "status": "authorized",
+  "access_token": "<jwt>",
+  "expires_in": 900,
+  "refresh_token": "<opaque>",
+  "refresh_expires_in": 2592000,
+  "user": { "subject": "org:user", "org_id": "org_x", "user_id": "user_x", "email": "u@bytedance.com" },
+  "scopes": ["cua:read", "cua:invoke", "cua:observe", "cua:cancel"],
+  "desktop_bound": true
+}
+```
+
+## Auth model
+
+- Login: Bytedance SSO in the browser. `device/start` returns a `login_url`
+  pointing at Bytedance; after the user signs in, the gateway's `/v1/auth/callback`
+  resolves the identity and binds the session; `device/poll` then returns tokens.
+- Access token: short-lived signed JWT (HS256), sent as `Authorization: Bearer`.
+- Refresh token: opaque, stored server-side only as a salted hash, rotated on
+  every use; reuse of a rotated token revokes the whole session.
+- Each business request is verified server-side (signature, expiry, active
+  session, scope) before reaching CUA.
+
+## Privacy
+
+The gateway does not persist the user's objective, answers, final result text,
+process traces, screenshots, full desktop access URLs, or artifact contents.

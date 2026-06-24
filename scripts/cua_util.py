@@ -1,0 +1,99 @@
+"""Shared helpers for the CUA Skill CLI.
+
+Stdlib only. Provides the unified JSON output contract and a structured error
+type. The CLI NEVER prints access tokens, refresh tokens, desktop access tokens,
+the user's objective, the user's answers, CUA's final result text, or screenshot
+bytes onto stdout/stderr; only invocation metadata, outcome, user email, and
+login status.
+"""
+
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+
+class SkillError(Exception):
+    """An error that maps to the unified JSON error envelope.
+
+    `code` follows the gateway error codes (AUTH_REQUIRED, TOKEN_EXPIRED,
+    REFRESH_FAILED, FORBIDDEN, DESKTOP_NOT_BOUND, INVOCATION_NOT_FOUND,
+    INVOCATION_NOT_WAITING_INPUT, CUA_BACKEND_UNAVAILABLE, RATE_LIMITED,
+    VALIDATION_ERROR, NETWORK, INTERNAL).
+    """
+
+    def __init__(self, code, message, **extra):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.extra = {k: v for k, v in extra.items() if v is not None}
+
+
+def emit_success(action, data=None):
+    """Print a single-line JSON success envelope and exit 0."""
+    payload = {"ok": True, "action": action}
+    if data:
+        payload.update(data)
+    _print(payload)
+    sys.exit(0)
+
+
+def emit_error(action, error):
+    """Print a single-line JSON error envelope and exit non-zero."""
+    if isinstance(error, SkillError):
+        body = {"code": error.code, "message": error.message}
+        body.update(error.extra)
+    else:
+        body = {"code": "INTERNAL", "message": str(error)}
+    payload = {"ok": False, "action": action, "error": body}
+    next_hint = _next_for_error(body)
+    if next_hint:
+        payload["next"] = next_hint
+    _print(payload)
+    sys.exit(1)
+
+
+def _next_for_error(body):
+    code = body.get("code")
+    retry = body.get("retry_command")
+    if code in ("AUTH_REQUIRED", "REFRESH_FAILED") and retry:
+        return {
+            "command": retry,
+            "agent_hint": "Show login_url (and user_code if present) to the user, run retry_command, "
+            "then re-run the original command. Never ask the user for a token or API key.",
+        }
+    if code == "TOKEN_EXPIRED" and retry:
+        return {"command": retry, "agent_hint": "Re-run retry_command, then retry the original command."}
+    return None
+
+
+def _print(payload):
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def now_epoch():
+    return datetime.now(timezone.utc).timestamp()
+
+
+def iso_to_epoch(value):
+    """Parse an ISO-8601 timestamp (with optional trailing Z) to epoch seconds."""
+    if not value:
+        return 0.0
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except (ValueError, AttributeError):
+        return 0.0
+
+
+def epoch_to_iso(epoch):
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
+def script_path():
+    return os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else "scripts/cua.py"
+
+
+def login_retry_command():
+    """The exact command an agent should run to (re)login, using this script's path."""
+    return f"python3 {script_path()} auth login"

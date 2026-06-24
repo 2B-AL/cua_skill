@@ -19,14 +19,27 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import cua_auth
 from cua_state import AuthState, SessionState
-from cua_util import SkillError, emit_error, emit_success, login_retry_command, now_epoch, script_path
+from cua_util import (
+    RETRYABLE_ERROR_CODES,
+    SkillError,
+    emit_error,
+    emit_success,
+    login_retry_command,
+    now_epoch,
+    script_path,
+)
 
 TERMINAL_OUTCOMES = ("completed", "failed", "cancelled")
-RESULT_POLL_WAIT_MS = 60000
+# Per-request wait windows are kept comfortably under typical API-gateway upstream
+# timeouts (~30s). Long tasks are driven by repeated short polls, not one long hold.
+DEFAULT_WATCH_WAIT_MS = 20000
+RESULT_POLL_WAIT_MS = 20000
+IDEMPOTENT_RETRIES = 2
 
 
 def main(argv=None):
@@ -117,11 +130,14 @@ def cmd_auth_logout(args, state, session):
 
 def cmd_ping(args, state, session):
     base_url = resolve_base_url(args, state)
-    return {"data": cua_auth.authorized_call(state, base_url, "GET", "/v1/ping")}
+    return {"data": cua_auth.authorized_call(state, base_url, "GET", "/v1/ping", retries=IDEMPOTENT_RETRIES)}
 
 
 def cmd_delegate(args, state, session):
     base_url = resolve_base_url(args, state)
+    # wait_ms defaults to 0: create the invocation and return its id immediately,
+    # well under the gateway timeout. This guarantees we capture invocation_id
+    # (a 504 here would otherwise lose it) and never double-submits the task.
     body = {"objective": args.objective, "wait_ms": args.wait_ms}
     envelope = cua_auth.authorized_call(
         state, base_url, "POST", "/v1/invocations", body=body, timeout=_call_timeout(args.wait_ms)
@@ -135,7 +151,7 @@ def cmd_watch(args, state, session):
     body = {"wait_ms": args.wait_ms}
     envelope = cua_auth.authorized_call(
         state, base_url, "POST", f"/v1/invocations/{invocation_id}/watch",
-        body=body, timeout=_call_timeout(args.wait_ms)
+        body=body, timeout=_call_timeout(args.wait_ms), retries=IDEMPOTENT_RETRIES
     )
     return _envelope_result("watch", envelope, session)
 
@@ -154,7 +170,9 @@ def cmd_answer(args, state, session):
 def cmd_cancel(args, state, session):
     base_url = resolve_base_url(args, state)
     invocation_id = _resolve_invocation_id(args, session)
-    data = cua_auth.authorized_call(state, base_url, "POST", f"/v1/invocations/{invocation_id}/cancel")
+    data = cua_auth.authorized_call(
+        state, base_url, "POST", f"/v1/invocations/{invocation_id}/cancel", retries=IDEMPOTENT_RETRIES
+    )
     return {"data": data}
 
 
@@ -162,11 +180,31 @@ def cmd_result(args, state, session):
     base_url = resolve_base_url(args, state)
     invocation_id = _resolve_invocation_id(args, session)
     deadline = now_epoch() + max(1, args.timeout)
-    envelope = cua_auth.authorized_call(state, base_url, "GET", f"/v1/invocations/{invocation_id}")
-    while envelope.get("outcome") == "in_progress" and now_epoch() < deadline:
+    envelope = None
+    while now_epoch() < deadline:
+        try:
+            if envelope is None:
+                envelope = cua_auth.authorized_call(
+                    state, base_url, "GET", f"/v1/invocations/{invocation_id}", retries=IDEMPOTENT_RETRIES
+                )
+            if envelope.get("outcome") != "in_progress":
+                break
+            envelope = cua_auth.authorized_call(
+                state, base_url, "POST", f"/v1/invocations/{invocation_id}/watch",
+                body={"wait_ms": RESULT_POLL_WAIT_MS}, timeout=_call_timeout(RESULT_POLL_WAIT_MS),
+                retries=IDEMPOTENT_RETRIES
+            )
+        except SkillError as exc:
+            # Transient gateway/backend timeout — the task is still running; keep polling.
+            if exc.code in RETRYABLE_ERROR_CODES:
+                envelope = None
+                time.sleep(2)
+                continue
+            raise
+    if envelope is None:
+        # Could not reach a state read within the deadline; report in_progress.
         envelope = cua_auth.authorized_call(
-            state, base_url, "POST", f"/v1/invocations/{invocation_id}/watch",
-            body={"wait_ms": RESULT_POLL_WAIT_MS}, timeout=_call_timeout(RESULT_POLL_WAIT_MS)
+            state, base_url, "GET", f"/v1/invocations/{invocation_id}", retries=IDEMPOTENT_RETRIES
         )
     return _envelope_result("result", envelope, session)
 
@@ -179,7 +217,7 @@ def cmd_observe(args, state, session):
         path = f"/v1/invocations/{invocation_id}/desktop/{leaf}"
     else:
         path = f"/v1/desktop/{leaf}"
-    data = cua_auth.authorized_call(state, base_url, "GET", path, timeout=120)
+    data = cua_auth.authorized_call(state, base_url, "GET", path, timeout=120, retries=IDEMPOTENT_RETRIES)
 
     if args.include_screenshot:
         screenshot = data.get("screenshot") or {}
@@ -255,8 +293,10 @@ def _next_for_envelope(envelope):
     hint = next_action.get("agent_hint", "")
     if outcome == "in_progress":
         return {
-            "command": f"python3 {script} watch --invocation-id {invocation_id} --wait-ms 60000",
-            "agent_hint": hint or "Keep watching until completed, needs_input, failed, or cancelled. Do not answer the task from progress.",
+            "command": f"python3 {script} watch --invocation-id {invocation_id}",
+            "agent_hint": hint or "Keep watching until completed, needs_input, failed, or cancelled. "
+            "Each watch returns quickly; just call it again while in_progress. For a hands-off wait, "
+            f"use `python3 {script} result --invocation-id {invocation_id}`. Do not answer the task from progress.",
         }
     if outcome == "needs_input":
         return {
@@ -317,18 +357,21 @@ def build_parser():
 
     p = sub.add_parser("delegate", help="Delegate the user's original objective to CUA.")
     p.add_argument("--objective", required=True, help="The user's original request. Do not pre-plan or add constraints.")
-    p.add_argument("--wait-ms", type=int, default=None, help="Max ms to wait before returning. Does not cancel the task.")
+    p.add_argument("--wait-ms", type=int, default=0,
+                   help="Max ms the server waits before returning. Default 0: return the invocation id "
+                        "immediately, then watch. Does not cancel the task.")
     p.set_defaults(handler=cmd_delegate, action="delegate")
 
     p = sub.add_parser("watch", help="Wait for or check an invocation's next state.")
     _add_invocation_args(p)
-    p.add_argument("--wait-ms", type=int, default=None, help="Max ms to wait before returning. Does not cancel the task.")
+    p.add_argument("--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS,
+                   help="Max ms to wait before returning (kept under the gateway timeout). Does not cancel the task.")
     p.set_defaults(handler=cmd_watch, action="watch")
 
     p = sub.add_parser("answer", help="Submit the user's answer when outcome is needs_input.")
     _add_invocation_args(p)
     p.add_argument("--answer", required=True, help="The user's answer to input_request.question.")
-    p.add_argument("--wait-ms", type=int, default=None, help="Max ms to wait before returning.")
+    p.add_argument("--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS, help="Max ms to wait before returning.")
     p.set_defaults(handler=cmd_answer, action="answer")
 
     p = sub.add_parser("cancel", help="Request cancellation. Only when the user asks to stop.")

@@ -12,6 +12,13 @@ import os
 import sys
 from datetime import datetime, timezone
 
+# Errors that are safe to retry transparently: gateway/upstream timeouts,
+# backend hiccups, rate limits, and local network blips. The CLI keeps polling
+# on these instead of failing a whole task on a single 504.
+RETRYABLE_ERROR_CODES = frozenset(
+    {"GATEWAY_TIMEOUT", "CUA_BACKEND_UNAVAILABLE", "RATE_LIMITED", "NETWORK"}
+)
+
 
 class SkillError(Exception):
     """An error that maps to the unified JSON error envelope.
@@ -64,6 +71,12 @@ def _next_for_error(body):
         }
     if code == "TOKEN_EXPIRED" and retry:
         return {"command": retry, "agent_hint": "Re-run retry_command, then retry the original command."}
+    if code in RETRYABLE_ERROR_CODES:
+        return {
+            "agent_hint": "Transient gateway/backend timeout — this is not a real failure. "
+            "The task is likely still running. Just re-run the same command (for a long task, "
+            "prefer `watch --last` or `result --last`).",
+        }
     return None
 
 

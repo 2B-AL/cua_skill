@@ -43,11 +43,20 @@ def gateway_call(method, base_url, path, token=None, body=None, query=None, time
     status, payload = request(method, base_url, path, token=token, body=body, query=query, timeout=timeout)
     if isinstance(payload, dict) and payload.get("ok") is True:
         return payload.get("data", {})
+    # Prefer a real gateway error envelope (it carries the authoritative code).
     error = payload.get("error") if isinstance(payload, dict) else None
-    if isinstance(error, dict):
+    if isinstance(error, dict) and error.get("code"):
         extra = {k: v for k, v in error.items() if k not in ("code", "message")}
-        raise SkillError(error.get("code", "INTERNAL"), error.get("message", "request failed"), **extra)
-    raise SkillError("INTERNAL", f"Unexpected gateway response (HTTP {status})")
+        raise SkillError(error["code"], error.get("message", "request failed"), **extra)
+    # 502/503/504 usually come from the API gateway (not our envelope) when an
+    # upstream sync wait exceeds the gateway timeout. Treat them as retryable so
+    # the CLI keeps polling instead of failing the task.
+    if status == 504:
+        raise SkillError("GATEWAY_TIMEOUT", "Gateway timed out (HTTP 504); the task is likely still running.")
+    if status in (502, 503):
+        raise SkillError("CUA_BACKEND_UNAVAILABLE", f"Gateway/backend unavailable (HTTP {status}).")
+    raw = payload.get("_raw") if isinstance(payload, dict) else None
+    raise SkillError("INTERNAL", raw or f"Unexpected gateway response (HTTP {status})")
 
 
 def _read_json(response):
@@ -60,4 +69,6 @@ def _read_json(response):
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        return {"ok": False, "error": {"code": "INTERNAL", "message": raw[:500]}}
+        # Non-JSON body (e.g. an API-gateway 504 HTML page). Don't fabricate an
+        # error code here — let gateway_call classify by HTTP status.
+        return {"_raw": raw[:500]}

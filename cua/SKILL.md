@@ -31,10 +31,14 @@ one-time step is login, which the workflow triggers for you. (Advanced override:
      prints, and wait for `status: "logged_in"`. Never ask for a token.
 2. **Delegate**: `delegate --objective "<the user's original request>"`.
    - Pass the user's request as-is. Do NOT plan, decompose, or add constraints.
-   - Note `data.invocation_id`.
+   - It returns almost immediately with `data.invocation_id` and
+     `outcome: in_progress`. Note `data.invocation_id`. Do NOT call `delegate`
+     again for the same request — that starts a second task.
 3. **Drive the outcome** in `data.outcome`:
-   - `in_progress` → run the command in `next.command` (a `watch`). Repeat until
-     the outcome changes. Do NOT cancel just because it is slow.
+   - `in_progress` → run `next.command` (a `watch`). Each `watch` returns quickly
+     (~20s); just call it again while it stays `in_progress`. For a long task you
+     can instead run `result --invocation-id <id>` once to block until it
+     finishes. Do NOT cancel just because it is slow.
    - `needs_input` → relay `data.input_request.question` to the user verbatim,
      then run `answer --invocation-id <id> --answer "<user's reply>"`.
    - `completed` → use `data.result.text` as the authoritative final answer.
@@ -57,6 +61,9 @@ recent invocation (e.g. `watch --last`).
   `input_request`, or a screenshot.
 - While `outcome == in_progress`, do not answer the delegated task yourself and
   do not switch to your own browser/search tools — keep watching.
+- A `GATEWAY_TIMEOUT` / `CUA_BACKEND_UNAVAILABLE` error is transient, NOT a
+  failure: the task is still running. Just re-run the same command (`watch --last`
+  or `result --last`). Never restart with a new `delegate`.
 - `cancel` only when the user explicitly says to stop.
 - `ping` is a read-only auth/desktop check; it creates no task. `self-test` runs
   local checks only. Do not delegate just to test setup.

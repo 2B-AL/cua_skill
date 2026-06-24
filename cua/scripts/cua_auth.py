@@ -9,7 +9,14 @@ import time
 import webbrowser
 
 from cua_http import gateway_call
-from cua_util import SkillError, epoch_to_iso, iso_to_epoch, login_retry_command, now_epoch
+from cua_util import (
+    RETRYABLE_ERROR_CODES,
+    SkillError,
+    epoch_to_iso,
+    iso_to_epoch,
+    login_retry_command,
+    now_epoch,
+)
 
 ACCESS_SKEW_SEC = 60
 DEFAULT_LOGIN_TIMEOUT_SEC = 300
@@ -45,8 +52,26 @@ def refresh_access_token(state, base_url):
     return data["access_token"]
 
 
-def authorized_call(state, base_url, method, path, body=None, query=None, timeout=None):
-    """Call a business endpoint with auto-refresh and a single retry on expiry."""
+def authorized_call(state, base_url, method, path, body=None, query=None, timeout=None, retries=0):
+    """Call a business endpoint with auto-refresh and an optional retry on
+    transient gateway/backend timeouts.
+
+    `retries` should only be > 0 for idempotent calls (GET, or watch/observe/ping
+    which are safe to repeat). Never retry delegate/answer — they create state.
+    """
+    attempt = 0
+    while True:
+        try:
+            return _authorized_call_once(state, base_url, method, path, body=body, query=query, timeout=timeout)
+        except SkillError as exc:
+            if exc.code in RETRYABLE_ERROR_CODES and attempt < retries:
+                attempt += 1
+                time.sleep(min(2 * attempt, 5))
+                continue
+            raise
+
+
+def _authorized_call_once(state, base_url, method, path, body=None, query=None, timeout=None):
     kwargs = {"body": body, "query": query}
     if timeout is not None:
         kwargs["timeout"] = timeout

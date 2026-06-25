@@ -71,6 +71,12 @@ def _next_for_error(body):
         }
     if code == "TOKEN_EXPIRED" and retry:
         return {"command": retry, "agent_hint": "Re-run retry_command, then retry the original command."}
+    if code == "SCHEDULING_UNAVAILABLE":
+        return {
+            "agent_hint": "This CUA backend does not support scheduled tasks. Do NOT retry with different "
+            "arguments and do NOT fall back to any external scheduler or host automation. Tell the user "
+            "scheduling is unavailable; if they want it now, run the goal once with `task run`/`delegate`.",
+        }
     if code in RETRYABLE_ERROR_CODES:
         return {
             "agent_hint": "Transient gateway/backend timeout — this is not a real failure. "

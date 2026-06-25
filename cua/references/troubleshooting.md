@@ -17,6 +17,7 @@ Branch on `error.code`.
 | `ARTIFACT_NOT_FOUND` | 404 | unknown artifact, or it has no bytes | re-check with `artifact list`; a placeholder artifact has no downloadable content |
 | `ACTIVE_RUN_CONFLICT` | 409 | the context already has a run in flight | wait for it (`task status`) before starting another |
 | `SCHEDULE_NESTING_NOT_ALLOWED` | 409 | a scheduled task tried to manage schedules | scheduled tasks cannot create/modify other schedules; do it directly |
+| `SCHEDULING_UNAVAILABLE` | 501 | this CUA backend has no scheduled-task endpoint (platform 404) | tell the user scheduling is unavailable; run the goal once with `task run`. Do NOT retry with other args or fall back to an external scheduler |
 | `PAYLOAD_TOO_LARGE` | 413 | request body too large | shorten the objective/note/answer |
 | `DESKTOP_NOT_FOUND` | 404 | `--desktop` id/name does not exist | run `desktop list` and use a listed id/name |
 | `CUA_BACKEND_UNAVAILABLE` | 503 | CUA backend down | wait and retry, or report the outage |

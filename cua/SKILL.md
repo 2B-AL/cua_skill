@@ -70,6 +70,12 @@ the user's intent clearly calls for it:
   continue` (not `delegate`) whenever you need the context to be reusable.
 - **Save a produced file / screenshot / log** ("把结果文件下载下来") →
   `artifact list --task-id <id>` then `artifact save --artifact-id <id>`.
+  `artifact list` reads the platform live, so run it even if an earlier result
+  showed no artifacts. If it is still empty, the file likely lives only on the
+  desktop — ask CUA to export/attach it with `task continue`, or use `observe`.
+  NEVER have CUA upload to an external share link and `curl` it: those URLs
+  often return an HTML interstitial (e.g. Cloudflare), not the real file. Always
+  download through `artifact save`, which respects content type and ownership.
 - **Inspect the full conversation** → `timeline show --context-id <id>`.
 - **Just check it's working** → `diagnose` (never `delegate` to test).
 

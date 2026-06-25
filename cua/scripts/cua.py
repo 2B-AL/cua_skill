@@ -419,12 +419,22 @@ def cmd_artifact_save(args, state, session):
 
     mime_type = data.get("mime_type")
     path = _write_artifact(raw, args.output, mime_type)
-    return {"data": {
+    result = {
         "source_artifact_id": artifact_id,
         "file": path,
         "mime_type": mime_type,
         "bytes": len(raw),
-    }, "next": {
+    }
+    # A surprise HTML payload usually means an error/interstitial page (e.g. a
+    # Cloudflare challenge from an external share link), not the real file.
+    if _looks_like_html(mime_type, raw):
+        result["suspect_html"] = True
+        return {"data": result, "next": {
+            "agent_hint": "The downloaded bytes look like an HTML page, not the expected file. "
+            "This is usually an error/login/interstitial page. Do not present it as the real document; "
+            "ask CUA to re-export the artifact instead.",
+        }}
+    return {"data": result, "next": {
         "agent_hint": "Artifact saved to data.file. Share the path with the user; do not print the bytes.",
     }}
 
@@ -613,6 +623,13 @@ def _schedule_result(action, data, session):
         "agent_hint": "Scheduled task created. Do NOT run the goal now unless the user also asked to do it once. "
         "After the scheduled time, use schedule history to read what actually ran.",
     }}
+
+
+def _looks_like_html(mime_type, raw):
+    if mime_type and "html" in mime_type.lower():
+        return True
+    head = raw[:512].lstrip().lower()
+    return head.startswith(b"<!doctype html") or head.startswith(b"<html")
 
 
 def _write_artifact(raw, output, mime_type):

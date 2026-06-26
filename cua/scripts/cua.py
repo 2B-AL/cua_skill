@@ -20,6 +20,7 @@ import os
 import sys
 import tempfile
 import time
+import urllib.parse
 from pathlib import Path
 
 import cua_auth
@@ -228,8 +229,24 @@ def cmd_observe(args, state, session):
             screenshot_file = _save_screenshot(b64, screenshot.get("mime_type"))
             data["screenshot_file"] = screenshot_file
             data["screenshot"] = screenshot
+
+    # `access_url` is the bare cloud-desktop (spice) view. The same gateway also
+    # serves the full CUA interface (desktop + the agent's app panel) at a
+    # `/cua-app` path prefix. Derive it so the agent can offer either view.
+    access_url = data.get("access_url")
+    if access_url:
+        desktop_view_url, full_interface_url = _derive_desktop_urls(access_url)
+        if desktop_view_url:
+            data["desktop_view_url"] = desktop_view_url
+        if full_interface_url:
+            data["full_interface_url"] = full_interface_url
+
     return {"data": data, "next": {
-        "agent_hint": "access_url is a temporary cloud-desktop link; if it expires, run observe again. "
+        "agent_hint": "Temporary cloud-desktop links; if one expires, run observe again. "
+                      "`desktop_view_url` (same as `access_url`) shows just the desktop; "
+                      "`full_interface_url` (the `/cua-app/...` link) shows the full CUA "
+                      "interface with the agent panel. Offer `full_interface_url` when the "
+                      "user wants to watch what CUA is doing. "
                       "Do not use observe to decide whether the task is done — use watch.",
     }}
 
@@ -702,6 +719,43 @@ def _next_for_envelope(envelope):
     if outcome == "cancelled":
         return {"agent_hint": hint or "The task was cancelled."}
     return None
+
+
+def _derive_desktop_urls(access_url):
+    """Split a desktop access URL into the desktop-only view and the full CUA UI.
+
+    The gateway hands back a spice link like `https://<host>/<desktop>` (just the
+    desktop). The full CUA interface — desktop plus the agent's app panel — is the
+    same origin with a `/cua-app` prefix on the path, e.g.
+    `https://<host>/cua-app/<desktop>`. Any query string / fragment (a temporary
+    token) is preserved on both. Returns `(desktop_view_url, full_interface_url)`;
+    either element is None when it can't be derived.
+    """
+    try:
+        parts = urllib.parse.urlsplit(access_url)
+    except ValueError:
+        return None, None
+    if not parts.scheme or not parts.netloc:
+        return None, None
+
+    path = parts.path or "/"
+    # Normalise: if the access URL already points at /cua-app, recover the bare
+    # desktop path so we can present both forms consistently.
+    if path == "/cua-app" or path.startswith("/cua-app/"):
+        full_path = path
+        desktop_path = path[len("/cua-app"):] or "/"
+    else:
+        desktop_path = path
+        prefix = path if path.startswith("/") else "/" + path
+        full_path = "/cua-app" + prefix
+
+    desktop_view_url = urllib.parse.urlunsplit(
+        (parts.scheme, parts.netloc, desktop_path, parts.query, parts.fragment)
+    )
+    full_interface_url = urllib.parse.urlunsplit(
+        (parts.scheme, parts.netloc, full_path, parts.query, parts.fragment)
+    )
+    return desktop_view_url, full_interface_url
 
 
 def _save_screenshot(b64, mime_type):

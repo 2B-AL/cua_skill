@@ -121,16 +121,33 @@ python3 scripts/cua.py result (--invocation-id <id> | --last) [--timeout 600]
 
 ## observe
 
-Get a short-lived desktop access URL, optionally a screenshot.
+Get short-lived desktop view links, optionally a screenshot.
 
 ```bash
 python3 scripts/cua.py observe [--invocation-id <id> | --last] [--include-screenshot]
 ```
 
-- `access_url` is temporary; if it expires, run `observe` again.
+- `access_url` / `desktop_view_url` — the bare cloud-desktop (spice) view, e.g.
+  `https://<host>/<desktop>`.
+- `full_interface_url` — the full CUA interface (desktop + the agent's app panel),
+  the same origin with a `/cua-app` path prefix, e.g.
+  `https://<host>/cua-app/<desktop>`. Both forms carry any temporary token on the
+  URL. Offer `full_interface_url` when the user wants to watch CUA work, not just
+  see the desktop.
+- These links are temporary; if one expires, run `observe` again.
 - `--include-screenshot` saves the image to a local file and returns
   `data.screenshot_file` plus `data.screenshot` metadata. The raw image bytes are
   never printed.
+
+Example `data`:
+
+```json
+{
+  "access_url": "https://sd8f5rf313dl1693i3fmg.apigateway-cn-beijing.volceapi.com/win10-spice-mcp-15",
+  "desktop_view_url": "https://sd8f5rf313dl1693i3fmg.apigateway-cn-beijing.volceapi.com/win10-spice-mcp-15",
+  "full_interface_url": "https://sd8f5rf313dl1693i3fmg.apigateway-cn-beijing.volceapi.com/cua-app/win10-spice-mcp-15"
+}
+```
 
 ## self-test
 

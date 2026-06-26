@@ -48,9 +48,14 @@ one-time step is login, which the workflow triggers for you. (Advanced override:
    - `completed` → use `data.result.text` as the authoritative final answer.
    - `failed` → explain the failure. Retry only if the user asks.
    - `cancelled` → tell the user it was cancelled.
-4. **Observe (optional)**: `observe` returns a temporary `access_url` so the user
-   can view or manually operate the desktop. Add `--include-screenshot` to also
-   save a screenshot to a local file (`data.screenshot_file`).
+4. **Observe (optional)**: `observe` returns temporary view links so the user can
+   watch or manually operate the desktop:
+   - `data.desktop_view_url` (same as `data.access_url`) — just the cloud desktop.
+   - `data.full_interface_url` (the `/cua-app/...` link) — the full CUA interface,
+     i.e. the desktop plus the agent's app panel. Offer this when the user wants
+     to see what CUA is doing, not only the raw desktop.
+   Add `--include-screenshot` to also save a screenshot locally
+   (`data.screenshot_file`).
 
 You can always use `--last` instead of `--invocation-id <id>` to act on the most
 recent invocation (e.g. `watch --last`).

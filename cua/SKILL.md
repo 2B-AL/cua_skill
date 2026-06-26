@@ -31,6 +31,10 @@ one-time step is login, which the workflow triggers for you. (Advanced override:
      prints, and wait for `status: "logged_in"`. Never ask for a token.
 2. **Delegate**: `delegate --objective "<the user's original request>"`.
    - Pass the user's request as-is. Do NOT plan, decompose, or add constraints.
+   - One exception: strip *local-delivery* intent ("下载到本地 / 保存到本地 /
+     download/save to my machine"). CUA runs on a cloud desktop and cannot reach
+     the user's machine; keep the objective about producing the result, and do
+     the local download yourself with `artifact save` (see below).
    - It returns almost immediately with `data.invocation_id` and
      `outcome: in_progress`. Note `data.invocation_id`. Do NOT call `delegate`
      again for the same request — that starts a second task.
@@ -68,14 +72,22 @@ the user's intent clearly calls for it:
   `context add-note --context-id <id> --text "..."` and/or
   `task continue --context-id <id> --objective "..."`. Use `task run`/`task
   continue` (not `delegate`) whenever you need the context to be reusable.
-- **Save a produced file / screenshot / log** ("把结果文件下载下来") →
-  `artifact list --task-id <id>` then `artifact save --artifact-id <id>`.
-  `artifact list` reads the platform live, so run it even if an earlier result
-  showed no artifacts. If it is still empty, the file likely lives only on the
-  desktop — ask CUA to export/attach it with `task continue`, or use `observe`.
-  NEVER have CUA upload to an external share link and `curl` it: those URLs
-  often return an HTML interstitial (e.g. Cloudflare), not the real file. Always
-  download through `artifact save`, which respects content type and ownership.
+- **Produce a file and bring it to the user's machine** ("生成一个文档并下载到本地")
+  → split the work: CUA *creates* the file on the cloud desktop, the skill
+  *delivers* it locally. CUA cannot reach the user's local machine, so:
+  1. Delegate only the creation, e.g. `task run --objective "生成一个99乘法表的
+     Word 文档"`. Do NOT put "下载到本地 / 保存到本地 / download to local" in the
+     objective — that is a delivery step CUA cannot perform, and forwarding it
+     makes CUA improvise (e.g. dumping the file as base64 text) instead of
+     emitting a proper artifact.
+  2. Bring it local with `artifact list --task-id <id>` then
+     `artifact save --artifact-id <id> --output <path>`. `artifact save` writes
+     to the machine running this CLI — that IS "download to local".
+  - If `artifact list` is empty, the run did not register the file as an
+    artifact. Ask CUA (via `task continue`) to **save/export the file as a
+    downloadable artifact**, then list again. Never accept a base64 dump or an
+    external share link as a substitute, and never `curl` such links (they often
+    return an HTML interstitial, not the file).
 - **Inspect the full conversation** → `timeline show --context-id <id>`.
 - **Just check it's working** → `diagnose` (never `delegate` to test).
 
@@ -102,6 +114,10 @@ the user's intent clearly calls for it:
   gateway rejects nesting (`SCHEDULE_NESTING_NOT_ALLOWED`).
 - Scheduled-task results come from `schedule history`, never from a live
   `watch`/`task status`.
+- CUA operates a cloud desktop only. "Download/save to local" is the skill's job
+  (`artifact save`), never CUA's. Never forward local-delivery wording to CUA,
+  and never accept a base64 text dump or external share link as the file —
+  require a real artifact and fetch it with `artifact save`.
 - `ping` is a read-only auth/desktop check; it creates no task. `self-test` runs
   local checks only. Do not delegate just to test setup.
 - Tokens, the user's objective, answers, result text, and screenshot bytes never

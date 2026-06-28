@@ -73,6 +73,16 @@ the user's intent clearly calls for it:
     for a one-off now. Read results later with `schedule history --schedule-id <id>`.
 - **Pick a desktop** ("用 win10-… 那台桌面") → `desktop list`, then
   `task run --desktop <id-or-name> --objective "..."`.
+- **Configure CUA's model** ("以后用 pro", "把推理调高", "当前用什么模型") →
+  use `model get` / `model set`. Only do this when the user explicitly asks to
+  inspect or change model settings. Do not switch models automatically for an
+  ordinary task.
+  - read: `model get`
+  - set: `model set --main-model <id> --reasoning-effort <low|medium|high>`
+  - If the user gives a display name or unclear id, run `model get` first and
+    choose from `data.available_models[].id`.
+  - Tell the user that setting the model changes the bound desktop's default for
+    future CUA delegations.
 - **Continue / add background** ("继续刚才那个会话", "先补充一点背景") →
   `context add-note --context-id <id> --text "..."` and/or
   `task continue --context-id <id> --objective "..."`. Use `task run`/`task
@@ -119,6 +129,8 @@ the user's intent clearly calls for it:
   gateway rejects nesting (`SCHEDULE_NESTING_NOT_ALLOWED`).
 - Scheduled-task results come from `schedule history`, never from a live
   `watch`/`task status`.
+- `model set` is a persistent setting for the bound cloud desktop. Use it only
+  for explicit model-setting requests; never hide it inside a normal delegation.
 - CUA operates a cloud desktop only. "Download/save to local" is the skill's job
   (`artifact save`), never CUA's. Never forward local-delivery wording to CUA,
   and never accept a base64 text dump or external share link as the file —

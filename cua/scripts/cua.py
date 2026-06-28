@@ -266,6 +266,26 @@ def cmd_desktop_list(args, state, session):
     return {"data": data}
 
 
+def cmd_model_get(args, state, session):
+    base_url = resolve_base_url(args, state)
+    data = cua_auth.authorized_call(state, base_url, "GET", "/v1/model-config", retries=IDEMPOTENT_RETRIES)
+    return {"data": data, "next": {
+        "agent_hint": "This is the default model config for future CUA delegations on the bound desktop.",
+    }}
+
+
+def cmd_model_set(args, state, session):
+    base_url = resolve_base_url(args, state)
+    body = {
+        "main_model": args.main_model,
+        "reasoning_effort": args.reasoning_effort,
+    }
+    data = cua_auth.authorized_call(state, base_url, "PATCH", "/v1/model-config", body=body)
+    return {"data": data, "next": {
+        "agent_hint": "Model config updated. It affects future CUA delegations on the bound desktop.",
+    }}
+
+
 def cmd_task_run(args, state, session):
     base_url = resolve_base_url(args, state)
     body = {"objective": args.objective, "wait_ms": args.wait_ms}
@@ -852,6 +872,16 @@ def _add_semantic_parsers(sub):
     desktop = sub.add_parser("desktop", help="Cloud-desktop commands.").add_subparsers(dest="desktop_command")
     p = desktop.add_parser("list", help="List selectable cloud desktops.")
     p.set_defaults(handler=cmd_desktop_list, action="desktop list")
+
+    model = sub.add_parser("model", help="Read or set the default CUA model config.").add_subparsers(dest="model_command")
+    p = model.add_parser("get", help="Read the bound desktop's default model config.")
+    p.set_defaults(handler=cmd_model_get, action="model get")
+
+    p = model.add_parser("set", help="Set the bound desktop's default main model and reasoning effort.")
+    p.add_argument("--main-model", required=True, help="Model id from `model get` data.available_models[].id.")
+    p.add_argument("--reasoning-effort", required=True, choices=["low", "medium", "high"],
+                   help="Default reasoning effort for future delegations.")
+    p.set_defaults(handler=cmd_model_set, action="model set")
 
     # -- task --
     task = sub.add_parser("task", help="Run and manage CUA tasks (semantic delegate).").add_subparsers(dest="task_command")

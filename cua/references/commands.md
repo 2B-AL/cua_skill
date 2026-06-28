@@ -185,6 +185,36 @@ a specific desktop, then pass it to `task run --desktop`.
 python3 scripts/cua.py desktop list
 ```
 
+## model get / model set
+
+Read or update the default model config for the bound CUA desktop. Use only
+when the user explicitly asks which model CUA uses or asks to change model /
+reasoning effort. This is persistent for future delegations on the bound
+desktop; it is not a one-task override.
+
+```bash
+python3 scripts/cua.py model get
+python3 scripts/cua.py model set --main-model deepseek-v4-pro --reasoning-effort high
+```
+
+`model get` returns:
+
+```json
+{
+  "desktop": {"id": "desktop_xxx", "name": "win10-spice-xxx"},
+  "model_config": {
+    "main_model": "deepseek-v4-pro",
+    "reasoning_effort": "high",
+    "source": "settings"
+  },
+  "available_models": [
+    {"id": "deepseek-v4-pro", "label": "deepseek-v4-pro", "description": "..."}
+  ],
+  "reasoning_effort_options": ["low", "medium", "high"],
+  "agent_hint": "..."
+}
+```
+
 ## task run
 
 Start a new task. Like `delegate`, but can target a desktop and creates a

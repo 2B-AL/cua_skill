@@ -209,6 +209,8 @@ def cmd_result(args, state, session):
         envelope = cua_auth.authorized_call(
             state, base_url, "GET", f"/v1/invocations/{invocation_id}", retries=IDEMPOTENT_RETRIES
         )
+    if envelope.get("outcome") in TERMINAL_OUTCOMES:
+        envelope = _authoritative_invocation_result(state, base_url, invocation_id, envelope)
     return _envelope_result("result", envelope, session)
 
 
@@ -804,6 +806,36 @@ def _envelope_result(action, envelope, session):
     if invocation_id:
         session.set_last_invocation_id(invocation_id)
     return {"data": envelope, "next": _next_for_envelope(envelope)}
+
+
+def _authoritative_invocation_result(state, base_url, invocation_id, previous):
+    """Fetch the task result endpoint for a terminal invocation.
+
+    `GET /v1/invocations/{id}` is a status projection and may not include final
+    text after a task has already completed. `GET /v1/tasks/{id}/result` is the
+    authoritative result projection; invocation ids are task ids in this
+    gateway. Preserve an already observed final text if a backend version
+    returns a thinner result body.
+    """
+    authoritative = cua_auth.authorized_call(
+        state, base_url, "GET", f"/v1/tasks/{invocation_id}/result", retries=IDEMPOTENT_RETRIES
+    )
+    previous_text = _envelope_text(previous)
+    authoritative_text = _envelope_text(authoritative)
+    if previous_text and not authoritative_text:
+        result = authoritative.setdefault("result", {})
+        result["text"] = previous_text
+    return authoritative
+
+
+def _envelope_text(envelope):
+    if not isinstance(envelope, dict):
+        return None
+    result = envelope.get("result")
+    if not isinstance(result, dict):
+        return None
+    text = result.get("text")
+    return text if isinstance(text, str) and text else None
 
 
 def _next_for_envelope(envelope):

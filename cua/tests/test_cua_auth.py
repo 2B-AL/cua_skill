@@ -25,7 +25,7 @@ class CuaAuthLoginTests(unittest.TestCase):
     def test_login_waits_on_auth_pending_and_accepts_token_response_without_status(self):
         state = FakeState()
         responses = [
-            SkillError("AUTH_PENDING", "SSO login is still pending"),
+            SkillError("AUTH_PENDING", "CloudIdentity login is still pending"),
             {
                 "access_token": "access-token",
                 "expires_in": 3600,
@@ -33,7 +33,7 @@ class CuaAuthLoginTests(unittest.TestCase):
                 "scope": "cua:read cua:invoke",
                 "desktop_bound": True,
                 "user": {
-                    "org_id": "bytedance",
+                    "org_id": "org-1",
                     "user_id": "user-1",
                     "email": "user@example.com",
                 },
@@ -69,7 +69,7 @@ class CuaAuthLoginTests(unittest.TestCase):
             "expires_in": 900,
             "refresh_token": "refresh-token",
             "desktop_bound": True,
-            "user": {"org_id": "bytedance", "user_id": "user-1"},
+            "user": {"org_id": "org-1", "user_id": "user-1"},
         })
 
         refresh_expires_at = iso_to_epoch(state.saved["refresh_token_expires_at"])

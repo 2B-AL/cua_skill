@@ -403,8 +403,6 @@ def cmd_config_sync_push(args, state, session):
     app = _config_sync_app(args.app)
     source = args.source
     steps = []
-    if (source == "native-file" or args.verify) and not args.session_id:
-        raise SkillError("VALIDATION_ERROR", "--session-id is required for native-file upload or verify.")
     if source == "native-file":
         file_path = _config_sync_native_file_path(app, args.file)
         raw = file_path.read_bytes()
@@ -413,10 +411,11 @@ def cmd_config_sync_push(args, state, session):
         if len(raw) > 4 * 1024 * 1024:
             raise SkillError("VALIDATION_ERROR", "Native config file exceeds 4 MiB limit.")
         upload_body = {
-            "session_id": args.session_id,
             "file_name": file_path.name,
             "content_base64": base64.b64encode(raw).decode("ascii"),
         }
+        if args.session_id:
+            upload_body["session_id"] = args.session_id
         uploaded = cua_auth.authorized_call(
             state, base_url, "POST", f"/v1/config-sync/apps/{urllib.parse.quote(app)}/native-file",
             body=upload_body,
@@ -432,9 +431,12 @@ def cmd_config_sync_push(args, state, session):
     steps.append({"step": "set_auth_source", "status": "ok", "result": switched})
     verify = None
     if args.verify:
+        verify_body = {"source": "active"}
+        if args.session_id:
+            verify_body["session_id"] = args.session_id
         verify = cua_auth.authorized_call(
             state, base_url, "POST", f"/v1/config-sync/apps/{urllib.parse.quote(app)}/verify",
-            body={"session_id": args.session_id, "source": "active"},
+            body=verify_body,
             timeout=120,
         )
         steps.append({"step": "verify", "status": "ok", "result": verify})
@@ -450,9 +452,12 @@ def cmd_config_sync_push(args, state, session):
 def cmd_config_sync_verify(args, state, session):
     base_url = resolve_base_url(args, state)
     app = _config_sync_app(args.app)
+    body = {"source": args.source}
+    if args.session_id:
+        body["session_id"] = args.session_id
     data = cua_auth.authorized_call(
         state, base_url, "POST", f"/v1/config-sync/apps/{urllib.parse.quote(app)}/verify",
-        body={"session_id": args.session_id, "source": args.source},
+        body=body,
         timeout=120,
     )
     return {"data": data}
@@ -463,9 +468,12 @@ def cmd_config_sync_clear(args, state, session):
     app = _config_sync_app(args.app)
     if args.source != "native-file":
         raise SkillError("VALIDATION_ERROR", "Only --source native-file is supported for clear in this version.")
+    body = {}
+    if args.session_id:
+        body["session_id"] = args.session_id
     data = cua_auth.authorized_call(
         state, base_url, "DELETE", f"/v1/config-sync/apps/{urllib.parse.quote(app)}/native-file",
-        body={"session_id": args.session_id},
+        body=body,
     )
     return {"data": data}
 
@@ -1230,13 +1238,13 @@ def _add_semantic_parsers(sub):
     p.add_argument("--source", choices=["native-file", "env"], default="native-file",
                    help="Active config source to select. native-file uploads a CLI-native config file.")
     p.add_argument("--file", help="Native config file path. Defaults to ~/.claude.json or ~/opencode.json.")
-    p.add_argument("--session-id", help="Current desktop session id. Required for native-file upload or --verify.")
+    p.add_argument("--session-id", help="Current desktop session id. If omitted, skill-gateway creates a config-sync session.")
     p.add_argument("--verify", action="store_true", help="Verify the active source after pushing.")
     p.set_defaults(handler=cmd_config_sync_push, action="config-sync push")
 
     p = config_sync.add_parser("verify", help="Verify a remote app config source.")
     p.add_argument("--app", required=True, help="Application name: claude-code or opencode.")
-    p.add_argument("--session-id", required=True, help="Current desktop session id required by the CUA guest.")
+    p.add_argument("--session-id", help="Current desktop session id. If omitted, skill-gateway creates a config-sync session.")
     p.add_argument("--source", choices=["active", "native_file", "env"], default="active",
                    help="Source to verify.")
     p.set_defaults(handler=cmd_config_sync_verify, action="config-sync verify")
@@ -1245,7 +1253,7 @@ def _add_semantic_parsers(sub):
     p.add_argument("--app", required=True, help="Application name: claude-code or opencode.")
     p.add_argument("--source", choices=["native-file"], default="native-file",
                    help="Config source to clear. This version supports native-file.")
-    p.add_argument("--session-id", required=True, help="Current desktop session id required by the CUA guest.")
+    p.add_argument("--session-id", help="Current desktop session id. If omitted, skill-gateway creates a config-sync session.")
     p.set_defaults(handler=cmd_config_sync_clear, action="config-sync clear")
 
     # -- task --

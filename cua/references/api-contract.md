@@ -52,9 +52,9 @@ Error:
 | `GET` | `/v1/config-sync/registry` | access token | app/connector capabilities for config sync |
 | `GET` | `/v1/config-sync/apps/{app}/auth` | access token | redacted remote app auth status |
 | `PATCH` | `/v1/config-sync/apps/{app}/auth` | access token | select active auth source (`{auth_source:native_file|env}`) |
-| `POST` | `/v1/config-sync/apps/{app}/native-file` | access token | upload app-native config via JSON `{session_id,file_name,content_base64}` |
-| `DELETE` | `/v1/config-sync/apps/{app}/native-file` | access token | clear native-file config (`{session_id}`) |
-| `POST` | `/v1/config-sync/apps/{app}/verify` | access token | verify remote config (`{session_id, source}`) |
+| `POST` | `/v1/config-sync/apps/{app}/native-file` | access token | upload app-native config via JSON `{file_name,content_base64,session_id?}` |
+| `DELETE` | `/v1/config-sync/apps/{app}/native-file` | access token | clear native-file config (`{session_id?}`) |
+| `POST` | `/v1/config-sync/apps/{app}/verify` | access token | verify remote config (`{source, session_id?}`) |
 | `POST` | `/v1/tasks` | access token | start a task (`{objective, desktop?, title?, context_id?, disable_ask_user?, wait_ms?}`) |
 | `GET` | `/v1/tasks/{id}` | access token | task state |
 | `GET` | `/v1/tasks/{id}/result` | access token | authoritative task result |

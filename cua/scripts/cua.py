@@ -351,6 +351,170 @@ def cmd_model_set(args, state, session):
     }}
 
 
+# -- config-sync commands --------------------------------------------------
+
+
+CONFIG_SYNC_DEFAULT_FILES = {
+    "claude-code": ".claude.json",
+    "opencode": "opencode.json",
+}
+
+
+def cmd_config_sync_doctor(args, state, session):
+    base_url = resolve_base_url(args, state)
+    registry = cua_auth.authorized_call(state, base_url, "GET", "/v1/config-sync/registry", retries=IDEMPOTENT_RETRIES)
+    apps = _config_sync_apps(args.apps)
+    results = []
+    for app in apps:
+        item = {"app": app, "local_native_file": _config_sync_local_file_status(app, None)}
+        try:
+            status = cua_auth.authorized_call(
+                state, base_url, "GET", f"/v1/config-sync/apps/{urllib.parse.quote(app)}/auth",
+                retries=IDEMPOTENT_RETRIES,
+            )
+            item["remote_auth"] = status
+            item["remote_status"] = "reachable"
+        except SkillError as exc:
+            item["remote_status"] = "error"
+            item["error"] = {"code": exc.code, "message": exc.message}
+        results.append(item)
+    return {"data": {
+        "registry": registry,
+        "items": results,
+        "agent_hint": "Doctor checks config-sync capability and redacted remote auth status. It does not print native file contents.",
+    }}
+
+
+def cmd_config_sync_status(args, state, session):
+    base_url = resolve_base_url(args, state)
+    apps = _config_sync_apps(args.apps)
+    items = []
+    for app in apps:
+        status = cua_auth.authorized_call(
+            state, base_url, "GET", f"/v1/config-sync/apps/{urllib.parse.quote(app)}/auth",
+            retries=IDEMPOTENT_RETRIES,
+        )
+        items.append(status)
+    return {"data": {"items": items}}
+
+
+def cmd_config_sync_push(args, state, session):
+    base_url = resolve_base_url(args, state)
+    app = _config_sync_app(args.app)
+    source = args.source
+    steps = []
+    if (source == "native-file" or args.verify) and not args.session_id:
+        raise SkillError("VALIDATION_ERROR", "--session-id is required for native-file upload or verify.")
+    if source == "native-file":
+        file_path = _config_sync_native_file_path(app, args.file)
+        raw = file_path.read_bytes()
+        if not raw:
+            raise SkillError("VALIDATION_ERROR", f"Native config file is empty: {file_path}")
+        if len(raw) > 4 * 1024 * 1024:
+            raise SkillError("VALIDATION_ERROR", "Native config file exceeds 4 MiB limit.")
+        upload_body = {
+            "session_id": args.session_id,
+            "file_name": file_path.name,
+            "content_base64": base64.b64encode(raw).decode("ascii"),
+        }
+        uploaded = cua_auth.authorized_call(
+            state, base_url, "POST", f"/v1/config-sync/apps/{urllib.parse.quote(app)}/native-file",
+            body=upload_body,
+        )
+        steps.append({"step": "upload_native_file", "status": "ok", "result": uploaded})
+        auth_source = "native_file"
+    else:
+        auth_source = "env"
+    switched = cua_auth.authorized_call(
+        state, base_url, "PATCH", f"/v1/config-sync/apps/{urllib.parse.quote(app)}/auth",
+        body={"auth_source": auth_source},
+    )
+    steps.append({"step": "set_auth_source", "status": "ok", "result": switched})
+    verify = None
+    if args.verify:
+        verify = cua_auth.authorized_call(
+            state, base_url, "POST", f"/v1/config-sync/apps/{urllib.parse.quote(app)}/verify",
+            body={"session_id": args.session_id, "source": "active"},
+            timeout=120,
+        )
+        steps.append({"step": "verify", "status": "ok", "result": verify})
+    return {"data": {
+        "app": app,
+        "auth_source": auth_source,
+        "verified": verify is not None,
+        "steps": steps,
+        "agent_hint": "Configuration sync updated the remote application's active auth source. Secrets and native file contents are not printed.",
+    }}
+
+
+def cmd_config_sync_verify(args, state, session):
+    base_url = resolve_base_url(args, state)
+    app = _config_sync_app(args.app)
+    data = cua_auth.authorized_call(
+        state, base_url, "POST", f"/v1/config-sync/apps/{urllib.parse.quote(app)}/verify",
+        body={"session_id": args.session_id, "source": args.source},
+        timeout=120,
+    )
+    return {"data": data}
+
+
+def cmd_config_sync_clear(args, state, session):
+    base_url = resolve_base_url(args, state)
+    app = _config_sync_app(args.app)
+    if args.source != "native-file":
+        raise SkillError("VALIDATION_ERROR", "Only --source native-file is supported for clear in this version.")
+    data = cua_auth.authorized_call(
+        state, base_url, "DELETE", f"/v1/config-sync/apps/{urllib.parse.quote(app)}/native-file",
+        body={"session_id": args.session_id},
+    )
+    return {"data": data}
+
+
+def _config_sync_apps(value):
+    if not value:
+        return ["claude-code", "opencode"]
+    apps = []
+    for item in value.split(","):
+        app = _config_sync_app(item)
+        if app not in apps:
+            apps.append(app)
+    return apps
+
+
+def _config_sync_app(value):
+    app = (value or "").strip().lower().replace("_", "-")
+    aliases = {
+        "claude": "claude-code",
+        "claude-code": "claude-code",
+        "opencode": "opencode",
+        "open-code": "opencode",
+    }
+    if app not in aliases:
+        raise SkillError("VALIDATION_ERROR", "Unsupported app. Use claude-code or opencode.")
+    return aliases[app]
+
+
+def _config_sync_native_file_path(app, explicit):
+    if explicit:
+        path = Path(explicit).expanduser()
+    else:
+        path = Path.home() / CONFIG_SYNC_DEFAULT_FILES[app]
+    if not path.exists() or not path.is_file():
+        raise SkillError("VALIDATION_ERROR", f"Native config file not found: {path}")
+    expected_name = CONFIG_SYNC_DEFAULT_FILES[app]
+    if path.name != expected_name:
+        raise SkillError("VALIDATION_ERROR", f"Native config file for {app} must be named {expected_name}.")
+    return path
+
+
+def _config_sync_local_file_status(app, explicit):
+    try:
+        path = _config_sync_native_file_path(app, explicit)
+    except SkillError as exc:
+        return {"present": False, "error": {"code": exc.code, "message": exc.message}}
+    return {"present": True, "file_name": path.name, "size_bytes": path.stat().st_size}
+
+
 def cmd_task_run(args, state, session):
     base_url = resolve_base_url(args, state)
     body = {"objective": args.objective, "wait_ms": args.wait_ms}
@@ -1049,6 +1213,40 @@ def _add_semantic_parsers(sub):
     p.add_argument("--reasoning-effort", required=True, choices=["low", "medium", "high"],
                    help="Default reasoning effort for future delegations.")
     p.set_defaults(handler=cmd_model_set, action="model set")
+
+    # -- config-sync --
+    config_sync = sub.add_parser("config-sync", help="Synchronize key application configuration to the bound CUA desktop.").add_subparsers(dest="config_sync_command")
+
+    p = config_sync.add_parser("doctor", help="Check config-sync capability and redacted app auth status.")
+    p.add_argument("--apps", help="Comma-separated apps. Defaults to claude-code,opencode.")
+    p.set_defaults(handler=cmd_config_sync_doctor, action="config-sync doctor")
+
+    p = config_sync.add_parser("status", help="Read redacted remote app auth status.")
+    p.add_argument("--apps", help="Comma-separated apps. Defaults to claude-code,opencode.")
+    p.set_defaults(handler=cmd_config_sync_status, action="config-sync status")
+
+    p = config_sync.add_parser("push", help="Push app config and select the active auth source.")
+    p.add_argument("--app", required=True, help="Application name: claude-code or opencode.")
+    p.add_argument("--source", choices=["native-file", "env"], default="native-file",
+                   help="Active config source to select. native-file uploads a CLI-native config file.")
+    p.add_argument("--file", help="Native config file path. Defaults to ~/.claude.json or ~/opencode.json.")
+    p.add_argument("--session-id", help="Current desktop session id. Required for native-file upload or --verify.")
+    p.add_argument("--verify", action="store_true", help="Verify the active source after pushing.")
+    p.set_defaults(handler=cmd_config_sync_push, action="config-sync push")
+
+    p = config_sync.add_parser("verify", help="Verify a remote app config source.")
+    p.add_argument("--app", required=True, help="Application name: claude-code or opencode.")
+    p.add_argument("--session-id", required=True, help="Current desktop session id required by the CUA guest.")
+    p.add_argument("--source", choices=["active", "native_file", "env"], default="active",
+                   help="Source to verify.")
+    p.set_defaults(handler=cmd_config_sync_verify, action="config-sync verify")
+
+    p = config_sync.add_parser("clear", help="Clear app config from the remote desktop.")
+    p.add_argument("--app", required=True, help="Application name: claude-code or opencode.")
+    p.add_argument("--source", choices=["native-file"], default="native-file",
+                   help="Config source to clear. This version supports native-file.")
+    p.add_argument("--session-id", required=True, help="Current desktop session id required by the CUA guest.")
+    p.set_defaults(handler=cmd_config_sync_clear, action="config-sync clear")
 
     # -- task --
     task = sub.add_parser("task", help="Run and manage CUA tasks (semantic delegate).").add_subparsers(dest="task_command")

@@ -112,6 +112,19 @@ the user's intent clearly calls for it:
     choose from `data.available_models[].id`.
   - Tell the user that setting the model changes the bound desktop's default for
     future CUA delegations.
+- **Synchronize key app config** ("把本机 Claude Code/OpenCode 配置同步到 CUA",
+  "让云端 /claude 使用我的本机配置") → use `config-sync`, not `delegate`.
+  This configures the remote application; it is not a task handoff by itself.
+  - inspect: `config-sync status --apps claude-code,opencode`
+  - push Claude Code native config:
+    `config-sync push --app claude-code --source native-file --file ~/.claude.json --session-id <id> --verify`
+  - push OpenCode native config:
+    `config-sync push --app opencode --source native-file --file ~/opencode.json --session-id <id> --verify`
+  - verify: `config-sync verify --app claude-code --session-id <id> --source active`
+  - clear native file: `config-sync clear --app claude-code --source native-file --session-id <id>`
+  Native config file contents and secrets must never be printed or placed in a
+  CUA task objective. The remote Windows profile path and file application
+  details are CUA-internal and should not be exposed to the user.
 - **Continue / add background** ("继续刚才那个会话", "先补充一点背景") →
   `context add-note --context-id <id> --text "..."` and/or
   `task continue --context-id <id> --objective "..."`. Use `task run`/`task
@@ -160,6 +173,9 @@ the user's intent clearly calls for it:
   `watch`/`task status`.
 - `model set` is a persistent setting for the bound cloud desktop. Use it only
   for explicit model-setting requests; never hide it inside a normal delegation.
+- `config-sync` is for application configuration synchronization only. It does
+  not transfer a Claude Code/OpenCode conversation or session history. Do not
+  forward native config file contents to CUA as prompt text.
 - CUA operates a cloud desktop only. "Download/save to local" is the skill's job
   (`artifact save`), never CUA's. Never forward local-delivery wording to CUA,
   and never accept a base64 text dump or external share link as the file —

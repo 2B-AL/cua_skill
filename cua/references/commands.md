@@ -234,6 +234,54 @@ python3 scripts/cua.py model set --main-model deepseek-v4-pro --reasoning-effort
 }
 ```
 
+## config-sync
+
+Synchronize key application configuration to the bound CUA desktop. This is for
+remote app configuration, not for transferring a Claude Code/OpenCode
+conversation history. Native config file contents are never printed.
+
+Supported apps:
+
+| App | Remote connector | Native file |
+| --- | --- | --- |
+| `claude-code` | `claude_coding_agent` | `.claude.json` |
+| `opencode` | `coding_agent` | `opencode.json` |
+
+```bash
+python3 scripts/cua.py config-sync doctor [--apps claude-code,opencode]
+python3 scripts/cua.py config-sync status [--apps claude-code,opencode]
+python3 scripts/cua.py config-sync push --app claude-code --source native-file \
+    --file ~/.claude.json --session-id <desktop_session_id> [--verify]
+python3 scripts/cua.py config-sync verify --app claude-code \
+    --session-id <desktop_session_id> [--source active|native_file|env]
+python3 scripts/cua.py config-sync clear --app claude-code --source native-file \
+    --session-id <desktop_session_id>
+```
+
+`config-sync push --source native-file` uploads the app-native config file to the
+gateway as base64 JSON; the gateway forwards it to CUA's connector
+`auth/native-file` API as multipart/form-data, switches `auth_source` to
+`native_file`, and optionally verifies the active source.
+
+Example success shape:
+
+```json
+{
+  "app": "claude-code",
+  "auth_source": "native_file",
+  "verified": true,
+  "steps": [
+    {"step": "upload_native_file", "status": "ok"},
+    {"step": "set_auth_source", "status": "ok"},
+    {"step": "verify", "status": "ok"}
+  ],
+  "agent_hint": "..."
+}
+```
+
+Do not paste `.claude.json` or `opencode.json` into a CUA task objective. CUA's
+remote Windows profile path and config application details are internal.
+
 ## task run
 
 Start a new task. Like `delegate`, but can target a desktop and creates a

@@ -89,6 +89,38 @@ Never ask the user for CUA tokens or API keys while updating the skill.
 You can always use `--last` instead of `--invocation-id <id>` to act on the most
 recent invocation (e.g. `watch --last`).
 
+## Mandatory preflight for remote coding-agent apps
+
+When the user asks CUA to use a remote coding-agent CLI/app, perform
+configuration sync before starting the actual task. This includes requests such
+as "在 CUA 云桌面上使用 Claude Code", "用 /claude", "用 OpenCode", or "让云端
+/opencode 完成". Treat this as key application configuration sync, not as task
+handoff.
+
+Preflight sequence:
+
+1. Identify the app:
+   - Claude Code, `/claude` → `claude-code`
+   - OpenCode, `/opencode` → `opencode`
+2. Run `config-sync status --apps <app>` to inspect redacted remote status.
+3. If the active source is not clearly verified/usable, and the local native
+   config file exists, run:
+   - Claude Code:
+     `config-sync push --app claude-code --source native-file --file ~/.claude.json --verify`
+   - OpenCode:
+     `config-sync push --app opencode --source native-file --file ~/opencode.json --verify`
+   `--session-id` is optional; when omitted, skill-gateway creates a short
+   config-sync session for the bound desktop.
+4. If the local native config file is missing, empty, invalid, or verification
+   fails, stop and report the configuration problem. Do not silently run the
+   remote coding-agent app unless the user explicitly asks to proceed without
+   synchronized config.
+5. After config is verified, run the user's actual CUA task.
+
+Never print native config file contents, API keys, tokens, account state, or
+remote Windows profile paths. Do not put secrets or native config JSON inside a
+CUA task objective.
+
 ## When to leave the simple path (semantic commands)
 
 The workflow above handles ~80% of requests. Switch to a semantic command when
@@ -117,11 +149,11 @@ the user's intent clearly calls for it:
   This configures the remote application; it is not a task handoff by itself.
   - inspect: `config-sync status --apps claude-code,opencode`
   - push Claude Code native config:
-    `config-sync push --app claude-code --source native-file --file ~/.claude.json --session-id <id> --verify`
+    `config-sync push --app claude-code --source native-file --file ~/.claude.json --verify`
   - push OpenCode native config:
-    `config-sync push --app opencode --source native-file --file ~/opencode.json --session-id <id> --verify`
-  - verify: `config-sync verify --app claude-code --session-id <id> --source active`
-  - clear native file: `config-sync clear --app claude-code --source native-file --session-id <id>`
+    `config-sync push --app opencode --source native-file --file ~/opencode.json --verify`
+  - verify: `config-sync verify --app claude-code --source active`
+  - clear native file: `config-sync clear --app claude-code --source native-file`
   Native config file contents and secrets must never be printed or placed in a
   CUA task objective. The remote Windows profile path and file application
   details are CUA-internal and should not be exposed to the user.

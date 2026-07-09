@@ -251,17 +251,19 @@ Supported apps:
 python3 scripts/cua.py config-sync doctor [--apps claude-code,opencode]
 python3 scripts/cua.py config-sync status [--apps claude-code,opencode]
 python3 scripts/cua.py config-sync push --app claude-code --source native-file \
-    --file ~/.claude.json --session-id <desktop_session_id> [--verify]
+    --file ~/.claude.json [--verify] [--session-id <desktop_session_id>]
 python3 scripts/cua.py config-sync verify --app claude-code \
-    --session-id <desktop_session_id> [--source active|native_file|env]
+    [--source active|native_file|env] [--session-id <desktop_session_id>]
 python3 scripts/cua.py config-sync clear --app claude-code --source native-file \
-    --session-id <desktop_session_id>
+    [--session-id <desktop_session_id>]
 ```
 
 `config-sync push --source native-file` uploads the app-native config file to the
 gateway as base64 JSON; the gateway forwards it to CUA's connector
 `auth/native-file` API as multipart/form-data, switches `auth_source` to
 `native_file`, and optionally verifies the active source.
+`--session-id` is optional; when omitted, skill-gateway creates a config-sync
+session for the bound desktop before calling the CUA connector API.
 
 Example success shape:
 

@@ -77,6 +77,12 @@ def _next_for_error(body):
             "arguments and do NOT fall back to any external scheduler or host automation. Tell the user "
             "scheduling is unavailable; if they want it now, run the goal once with `task run`/`delegate`.",
         }
+    if code == "CONFIG_SYNC_CONNECTOR_AUTH_UNAVAILABLE":
+        return {
+            "agent_hint": "The bound desktop's my-cua connector does not expose the config-sync auth/native-file "
+            "API. Stop the remote Claude Code/OpenCode task preflight, do not retry `config-sync push`, and ask "
+            "the operator to deploy/update my-cua with connector auth/native-file support.",
+        }
     if code in RETRYABLE_ERROR_CODES:
         return {
             "agent_hint": "Transient gateway/backend timeout — this is not a real failure. "

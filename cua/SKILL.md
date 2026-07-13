@@ -103,12 +103,19 @@ Preflight sequence:
    - Claude Code, `/claude` → `claude-code`
    - OpenCode, `/opencode` → `opencode`
 2. Run `config-sync status --apps <app>` to inspect redacted remote status.
-3. If the active source is not clearly verified/usable, and the local native
+   If this returns `CONFIG_SYNC_CONNECTOR_AUTH_UNAVAILABLE`, an upstream 404, or
+   any other config-sync capability error, stop and report that the bound
+   desktop/my-cua connector does not expose the required auth/native-file API.
+   Do not continue to `config-sync push`, and do not start the remote
+   coding-agent task unless the user explicitly asks to proceed without config
+   sync.
+3. If status is reachable but the active source is not clearly verified/usable,
+   and the local native
    config file exists, run:
    - Claude Code:
      `config-sync push --app claude-code --source native-file --file ~/.claude.json --verify`
    - OpenCode:
-     `config-sync push --app opencode --source native-file --file ~/opencode.json --verify`
+     `config-sync push --app opencode --source native-file --file ~/.config/opencode/opencode.json --verify`
    `--session-id` is optional; when omitted, skill-gateway creates a short
    config-sync session for the bound desktop.
 4. If the local native config file is missing, empty, invalid, or verification
@@ -151,7 +158,7 @@ the user's intent clearly calls for it:
   - push Claude Code native config:
     `config-sync push --app claude-code --source native-file --file ~/.claude.json --verify`
   - push OpenCode native config:
-    `config-sync push --app opencode --source native-file --file ~/opencode.json --verify`
+    `config-sync push --app opencode --source native-file --file ~/.config/opencode/opencode.json --verify`
   - verify: `config-sync verify --app claude-code --source active`
   - clear native file: `config-sync clear --app claude-code --source native-file`
   Native config file contents and secrets must never be printed or placed in a

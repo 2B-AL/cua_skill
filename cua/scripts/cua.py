@@ -354,9 +354,14 @@ def cmd_model_set(args, state, session):
 # -- config-sync commands --------------------------------------------------
 
 
-CONFIG_SYNC_DEFAULT_FILES = {
+CONFIG_SYNC_NATIVE_FILE_NAMES = {
     "claude-code": ".claude.json",
     "opencode": "opencode.json",
+}
+
+CONFIG_SYNC_DEFAULT_FILE_PATHS = {
+    "claude-code": Path.home() / ".claude.json",
+    "opencode": Path.home() / ".config" / "opencode" / "opencode.json",
 }
 
 
@@ -376,7 +381,9 @@ def cmd_config_sync_doctor(args, state, session):
             item["remote_status"] = "reachable"
         except SkillError as exc:
             item["remote_status"] = "error"
-            item["error"] = {"code": exc.code, "message": exc.message}
+            error = {"code": exc.code, "message": exc.message}
+            error.update(exc.extra)
+            item["error"] = error
         results.append(item)
     return {"data": {
         "registry": registry,
@@ -506,10 +513,10 @@ def _config_sync_native_file_path(app, explicit):
     if explicit:
         path = Path(explicit).expanduser()
     else:
-        path = Path.home() / CONFIG_SYNC_DEFAULT_FILES[app]
+        path = CONFIG_SYNC_DEFAULT_FILE_PATHS[app]
     if not path.exists() or not path.is_file():
         raise SkillError("VALIDATION_ERROR", f"Native config file not found: {path}")
-    expected_name = CONFIG_SYNC_DEFAULT_FILES[app]
+    expected_name = CONFIG_SYNC_NATIVE_FILE_NAMES[app]
     if path.name != expected_name:
         raise SkillError("VALIDATION_ERROR", f"Native config file for {app} must be named {expected_name}.")
     return path
@@ -1237,7 +1244,7 @@ def _add_semantic_parsers(sub):
     p.add_argument("--app", required=True, help="Application name: claude-code or opencode.")
     p.add_argument("--source", choices=["native-file", "env"], default="native-file",
                    help="Active config source to select. native-file uploads a CLI-native config file.")
-    p.add_argument("--file", help="Native config file path. Defaults to ~/.claude.json or ~/opencode.json.")
+    p.add_argument("--file", help="Native config file path. Defaults to ~/.claude.json or ~/.config/opencode/opencode.json.")
     p.add_argument("--session-id", help="Current desktop session id. If omitted, skill-gateway creates a config-sync session.")
     p.add_argument("--verify", action="store_true", help="Verify the active source after pushing.")
     p.set_defaults(handler=cmd_config_sync_push, action="config-sync push")

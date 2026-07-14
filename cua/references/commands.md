@@ -286,6 +286,51 @@ Example success shape:
 Do not paste `.claude.json` or `opencode.json` into a CUA task objective. CUA's
 remote Windows profile path and config application details are internal.
 
+## github-mvp0
+
+Experimental direct-GitHub workflow using `gh` and HTTPS Git on the existing CUA
+desktop. It reuses `/v1/tasks` and config-sync; it does not add a gateway GitHub
+broker or transfer repository archives.
+
+```bash
+python3 scripts/cua.py github-mvp0 doctor \
+  [--agent claude-code|opencode] [--desktop <id>] [--wait-ms 20000]
+
+python3 scripts/cua.py github-mvp0 connect \
+  [--desktop <id>] [--wait-ms 20000]
+python3 scripts/cua.py github-mvp0 connect \
+  --task-id <login-task-id> --authorized [--wait-ms 20000]
+
+python3 scripts/cua.py github-mvp0 status [--desktop <id>]
+python3 scripts/cua.py github-mvp0 logout [--desktop <id>]
+
+python3 scripts/cua.py github-mvp0 run \
+  --issue https://github.com/<owner>/<repo>/issues/<number> \
+  --agent claude-code|opencode [--desktop <id>] [--title <title>] \
+  [--wait] [--timeout 1800]
+
+python3 scripts/cua.py github-mvp0 watch (--task-id <id> | --last)
+python3 scripts/cua.py github-mvp0 result (--task-id <id> | --last) [--timeout 1800]
+python3 scripts/cua.py github-mvp0 cancel (--task-id <id> | --last)
+```
+
+`connect` is two-stage. When it returns `data.status = needs_user_action`, show
+`data.verification_uri` and `data.user_code` to the user. Only after the user
+confirms authorization, run the returned `next.command` with `--authorized`.
+
+`run` requires a verified connection cached by `connect` or `status`, rejects a
+different desktop, validates a canonical Issue URL, calls config-sync verify for
+the selected coding agent, then starts a `disable_ask_user` task. The generated
+workspace/branch use a client-side run id:
+
+```text
+C:\CUA\github-mvp0\<run-id>\repo
+cua/mvp0/<run-id>-issue-<number>
+```
+
+Success returns parsed repository/Issue/branch/commit/PR/test fields. See
+`github-mvp0.md` for the state protocol and MVP0 test gates.
+
 ## task run
 
 Start a new task. Like `delegate`, but can target a desktop and creates a

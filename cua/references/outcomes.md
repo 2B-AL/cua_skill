@@ -30,6 +30,26 @@ Keep using the semantic ids (`invocation_id` / task id, `context_id`); the
 
 The CLI also adds a top-level `next` block with a ready-to-run `command`.
 
+## GitHub MVP0 projection
+
+`github-mvp0` consumes the same task envelope but does not expose raw result
+text. It projects the generic outcomes into a small protocol:
+
+| task outcome | GitHub MVP0 output |
+| --- | --- |
+| `in_progress` | `data.status=in_progress`; follow `github-mvp0 watch` |
+| login `needs_input` | `data.status=needs_user_action` plus validated `verification_uri` and `user_code` |
+| non-login `needs_input` | error `GITHUB_MVP0_UNEXPECTED_INPUT` because the task must run offline |
+| login completed | `data.status=connected` plus login/desktop |
+| Issue completed | `data.status=completed` plus validated branch/commit/PR/test fields |
+| failed | a fixed `GITHUB_MVP0_*` error, or `GITHUB_MVP0_TASK_FAILED` |
+| cancelled | `data.status=cancelled` |
+
+For login, `next.command` changes from `watch` to
+`connect --task-id <id> --authorized` only after a valid device-auth marker is
+observed. The user must confirm the external authorization before that command
+is run.
+
 ## Platform `resultType` → outcome
 
 The gateway maps the platform run result onto the stable `outcome`:

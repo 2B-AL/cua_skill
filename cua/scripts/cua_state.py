@@ -176,6 +176,48 @@ class SessionState(_JsonFile):
         if changed:
             self.save()
 
+    @property
+    def github_mvp0(self):
+        value = self.data.get("github_mvp0")
+        return value if isinstance(value, dict) else {}
+
+    @property
+    def github_mvp0_connection(self):
+        value = self.github_mvp0.get("connection")
+        return value if isinstance(value, dict) else {}
+
+    def github_mvp0_task(self, task_id):
+        tasks = self.github_mvp0.get("tasks")
+        if not isinstance(tasks, dict):
+            return {}
+        value = tasks.get(task_id)
+        return value if isinstance(value, dict) else {}
+
+    def set_github_mvp0_task(self, task_id, metadata):
+        if not task_id:
+            return
+        root = self.data.setdefault("github_mvp0", {})
+        tasks = root.setdefault("tasks", {})
+        tasks[task_id] = dict(metadata or {})
+        # This is a convenience cache, not an audit log. Keep it bounded.
+        while len(tasks) > 50:
+            tasks.pop(next(iter(tasks)))
+        root["last_task_id"] = task_id
+        self.data["last_task_id"] = task_id
+        self.data["last_invocation_id"] = task_id
+        self.save()
+
+    def set_github_mvp0_connection(self, connection):
+        root = self.data.setdefault("github_mvp0", {})
+        root["connection"] = dict(connection or {})
+        self.save()
+
+    def clear_github_mvp0_connection(self):
+        root = self.data.get("github_mvp0")
+        if isinstance(root, dict) and "connection" in root:
+            root.pop("connection", None)
+            self.save()
+
 
 def _ensure_secure_permissions(path):
     try:

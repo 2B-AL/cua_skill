@@ -128,6 +128,38 @@ Never print native config file contents, API keys, tokens, account state, or
 remote Windows profile paths. Do not put secrets or native config JSON inside a
 CUA task objective.
 
+## Experimental GitHub MVP0 workflow
+
+When the user explicitly wants the direct CUA-desktop GitHub MVP0 flow (GitHub
+Issue → Claude Code/OpenCode → Pull Request), use `github-mvp0`; do not assemble
+its prompts manually and do not use a generic `delegate` for the code task.
+
+1. Complete the normal CUA `auth status`/`auth login` first.
+2. Complete the coding-agent config-sync preflight above.
+3. Run `github-mvp0 connect [--desktop <id>]`.
+   - Keep following `next.command` while `data.status == in_progress`.
+   - On `needs_user_action`, show only `data.verification_uri` and
+     `data.user_code` to the user. Wait for them to authorize locally.
+   - After the user confirms, run the returned command
+     (`connect --task-id <id> --authorized`). Never set `--authorized` yourself.
+4. After connect returns `data.status == connected`, run:
+   `github-mvp0 run --issue <canonical-issue-url> --agent <claude-code|opencode>`.
+   The command automatically verifies the active config-sync source, reuses the
+   desktop saved by connect, fixes a generated task branch, and disables CUA
+   mid-task questions.
+5. Follow `next.command` (`github-mvp0 watch`) or use
+   `github-mvp0 result --task-id <id>` until terminal. Success is authoritative
+   only when the parsed result contains `data.pull_request_url`.
+
+Do not run the code task on a different desktop from connect. `github-mvp0 run`
+rejects this with `GITHUB_MVP0_DESKTOP_CHANGED`. If local MVP0 state was lost,
+run `github-mvp0 status` to verify and rebuild it before `run`.
+
+This is an MVP0 validation path for a test GitHub account/repository and a
+disposable desktop. It deliberately does not provide the production credential
+isolation model. See `references/github-mvp0.md` for the command protocol and
+test checklist.
+
 ## When to leave the simple path (semantic commands)
 
 The workflow above handles ~80% of requests. Switch to a semantic command when
@@ -164,6 +196,10 @@ the user's intent clearly calls for it:
   Native config file contents and secrets must never be printed or placed in a
   CUA task objective. The remote Windows profile path and file application
   details are CUA-internal and should not be exposed to the user.
+- **Direct GitHub Issue-to-PR MVP0** ("用 CUA 桌面的 gh 处理 Issue 并提 PR",
+  "github-mvp0") → use `github-mvp0 connect/status/run/watch/result`, following
+  the experimental workflow above. Do not turn the repository into an artifact
+  or proxy GitHub operations through the gateway.
 - **Continue / add background** ("继续刚才那个会话", "先补充一点背景") →
   `context add-note --context-id <id> --text "..."` and/or
   `task continue --context-id <id> --objective "..."`. Use `task run`/`task
@@ -222,7 +258,10 @@ the user's intent clearly calls for it:
 - `ping` is a read-only auth/desktop check; it creates no task. `self-test` runs
   local checks only. Do not delegate just to test setup.
 - Tokens, the user's objective, answers, result text, and screenshot bytes never
-  appear in output — do not try to print or log them.
+  appear in generic command output — do not try to print or log them. The
+  `github-mvp0` surface emits only its parsed allow-listed fields (account login,
+  device URL/code, branch, commit, PR URL, and compact test summary), never the
+  raw CUA result or GitHub token.
 
 ## References (read when needed)
 
@@ -231,3 +270,4 @@ the user's intent clearly calls for it:
 - `references/auth.md` — login, token refresh, and auth error handling.
 - `references/troubleshooting.md` — common failures and fixes.
 - `references/api-contract.md` — gateway response and error-code contract.
+- `references/github-mvp0.md` — experimental direct-gh Issue-to-PR workflow.

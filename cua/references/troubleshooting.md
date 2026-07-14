@@ -26,6 +26,35 @@ Branch on `error.code`.
 | `NETWORK` | — | cannot reach the gateway | check connectivity / `--api-base-url`; retry |
 | `INTERNAL` | 500 | unexpected | retry once; if it persists, report it |
 
+## GitHub MVP0 errors
+
+These are local Skill errors or fixed error markers parsed from the CUA result;
+they do not require a new gateway error contract.
+
+| code | cause | what to do |
+| --- | --- | --- |
+| `GITHUB_MVP0_GH_NOT_INSTALLED` | CUA image has no usable `gh` | use the expected MVP0 image |
+| `GITHUB_MVP0_GIT_NOT_INSTALLED` | CUA image has no usable Git | use the expected MVP0 image |
+| `GITHUB_MVP0_AUTH_REQUIRED` | no verified remote `gh` login is cached, or CUA reports logged out | run `github-mvp0 connect`; if the desktop may already be logged in, run `status` |
+| `GITHUB_MVP0_AUTH_OUTPUT_INVALID` | login task did not return the fixed device URL/code marker | inspect the task with desktop access; retry connect once |
+| `GITHUB_MVP0_DEVICE_CODE_EXPIRED` | one-time code expired | start a new connect task |
+| `GITHUB_MVP0_AUTH_DENIED` | GitHub authorization was cancelled/denied | ask the user whether to retry connect |
+| `GITHUB_MVP0_SESSION_NOT_RESUMABLE` | login process was lost while the task waited | use temporary desktop access for the MVP0 manual fallback |
+| `GITHUB_MVP0_DESKTOP_CHANGED` | code task targets a different desktop from login | omit `--desktop` or use the desktop saved by connect |
+| `GITHUB_MVP0_UNEXPECTED_INPUT` | an offline code/doctor/status task asked a question | stop; simplify the Issue or inspect the CUA task |
+| `GITHUB_MVP0_AGENT_CONFIG_INVALID` | Claude Code/OpenCode config is unavailable | run the normal config-sync preflight |
+| `GITHUB_MVP0_REPO_DENIED` | account cannot access the repository | correct the test account/repository permission |
+| `GITHUB_MVP0_REPO_ARCHIVED` | repository is archived | select a writable test repository |
+| `GITHUB_MVP0_ISSUE_NOT_FOUND` | Issue is missing/not usable | check the canonical Issue URL and state |
+| `GITHUB_MVP0_ISSUE_NOT_OPEN` | Issue is not open | select an open test Issue |
+| `GITHUB_MVP0_CLONE_FAILED` | HTTPS clone failed | check GitHub reachability, auth, and repository permission |
+| `GITHUB_MVP0_NO_CHANGES` | coding agent produced no diff | inspect Issue clarity and agent output |
+| `GITHUB_MVP0_TEST_FAILED` | relevant tests failed | inspect/fix; MVP0 does not push on this path |
+| `GITHUB_MVP0_PUSH_FAILED` | task branch push failed | check write permission and branch policy |
+| `GITHUB_MVP0_PR_FAILED` | PR create/query failed | check repository policy and whether a PR already exists |
+| `GITHUB_MVP0_RESULT_INVALID` | fixed result fields/PR URL do not match the request | inspect the CUA task; never infer success |
+| `GITHUB_MVP0_TASK_FAILED` | CUA failed without a recognized MVP0 marker | inspect task/desktop diagnostics |
+
 The gateway translates the platform's raw snake_case errors (`active_run_conflict`,
 `run_not_blocked`, `session_desktop_mismatch`, `nested_scheduled_task_not_allowed`,
 `deleted_task`, `artifact_missing`, `payload_too_large`, …) into these stable

@@ -21,9 +21,11 @@ import sys
 import tempfile
 import time
 import urllib.parse
+import uuid
 from pathlib import Path
 
 import cua_auth
+import cua_github_mvp0
 from cua_state import AuthState, SessionState
 from cua_util import (
     RETRYABLE_ERROR_CODES,
@@ -483,6 +485,295 @@ def cmd_config_sync_clear(args, state, session):
         body=body,
     )
     return {"data": data}
+
+
+# -- GitHub MVP0 commands -------------------------------------------------
+
+
+def cmd_github_mvp0_doctor(args, state, session):
+    return _github_mvp0_create_task(
+        args, state, session,
+        kind="doctor",
+        title=f"GitHub MVP0 doctor ({args.agent})",
+        objective=cua_github_mvp0.build_doctor_prompt(args.agent),
+        disable_ask_user=True,
+        metadata={"coding_agent": args.agent},
+    )
+
+
+def cmd_github_mvp0_connect(args, state, session):
+    base_url = resolve_base_url(args, state)
+    if args.authorized:
+        if not args.task_id:
+            raise SkillError("VALIDATION_ERROR", "--authorized requires --task-id from the first connect call.")
+        metadata = session.github_mvp0_task(args.task_id)
+        if metadata and metadata.get("kind") != "connect":
+            raise SkillError("VALIDATION_ERROR", "--task-id does not belong to a GitHub MVP0 connect task.")
+        envelope = cua_auth.authorized_call(
+            state, base_url, "POST", f"/v1/tasks/{args.task_id}/answer",
+            body={"answer": "I completed GitHub authorization. Continue verification.", "wait_ms": args.wait_ms},
+            timeout=_call_timeout(args.wait_ms),
+        )
+        return _github_mvp0_envelope_result(
+            state, base_url, envelope, session, kind="connect", metadata=metadata
+        )
+    if args.task_id:
+        raise SkillError("VALIDATION_ERROR", "Use --task-id together with --authorized, or omit both to start login.")
+    return _github_mvp0_create_task(
+        args, state, session,
+        kind="connect",
+        title="GitHub MVP0 login",
+        objective=cua_github_mvp0.build_login_prompt(),
+        disable_ask_user=False,
+        metadata={},
+    )
+
+
+def cmd_github_mvp0_status(args, state, session):
+    return _github_mvp0_create_task(
+        args, state, session,
+        kind="status",
+        title="GitHub MVP0 status",
+        objective=cua_github_mvp0.build_status_prompt(),
+        disable_ask_user=True,
+        metadata={},
+    )
+
+
+def cmd_github_mvp0_logout(args, state, session):
+    login = session.github_mvp0_connection.get("login")
+    return _github_mvp0_create_task(
+        args, state, session,
+        kind="logout",
+        title="GitHub MVP0 logout",
+        objective=cua_github_mvp0.build_logout_prompt(login),
+        disable_ask_user=True,
+        metadata={},
+    )
+
+
+def cmd_github_mvp0_run(args, state, session):
+    issue = cua_github_mvp0.parse_issue_url(args.issue)
+    base_url = resolve_base_url(args, state)
+    connection = session.github_mvp0_connection
+    if connection.get("status") not in (None, "connected") or not connection.get("login"):
+        raise SkillError(
+            "GITHUB_MVP0_AUTH_REQUIRED",
+            "No verified GitHub MVP0 connection is cached. Run github-mvp0 connect or status first.",
+        )
+    connected_desktop = connection.get("desktop")
+    if args.desktop and connected_desktop and args.desktop != connected_desktop:
+        raise SkillError(
+            "GITHUB_MVP0_DESKTOP_CHANGED",
+            "--desktop differs from the desktop that holds the verified GitHub CLI login.",
+        )
+    run_id = uuid.uuid4().hex[:12]
+    layout = cua_github_mvp0.make_run_layout(issue, run_id)
+    desktop = _github_mvp0_desktop(args, session)
+
+    # Mandatory coding-agent preflight. This is the existing redacted remote
+    # verification endpoint; no native config contents enter the task prompt.
+    verify_body = {"source": "active"}
+    verify = cua_auth.authorized_call(
+        state, base_url, "POST",
+        f"/v1/config-sync/apps/{urllib.parse.quote(args.agent)}/verify",
+        body=verify_body,
+        timeout=120,
+    )
+    if not cua_github_mvp0.config_sync_verified(verify):
+        raise SkillError(
+            "GITHUB_MVP0_AGENT_CONFIG_INVALID",
+            f"The active {args.agent} configuration did not return an explicit verified status.",
+        )
+
+    metadata = {
+        "coding_agent": args.agent,
+        "repository": issue["repository"],
+        "issue_number": issue["issue_number"],
+        "issue_url": issue["issue_url"],
+        "run_id": run_id,
+        "workspace": layout["workspace"],
+        "branch": layout["branch"],
+    }
+    result = _github_mvp0_create_task(
+        args, state, session,
+        kind="run",
+        title=args.title or f"GitHub MVP0: {issue['repository']}#{issue['issue_number']}",
+        objective=cua_github_mvp0.build_issue_task_prompt(issue, layout, args.agent),
+        disable_ask_user=True,
+        metadata=metadata,
+        desktop=desktop,
+    )
+    if args.wait and result.get("data", {}).get("status") == "in_progress":
+        task_id = result["data"]["task_id"]
+        return _github_mvp0_wait_for_result(state, base_url, task_id, session, args.timeout)
+    return result
+
+
+def cmd_github_mvp0_watch(args, state, session):
+    base_url = resolve_base_url(args, state)
+    task_id = _resolve_task_id(args, session)
+    envelope = cua_auth.authorized_call(
+        state, base_url, "GET", f"/v1/tasks/{task_id}", retries=IDEMPOTENT_RETRIES
+    )
+    return _github_mvp0_envelope_result(state, base_url, envelope, session)
+
+
+def cmd_github_mvp0_result(args, state, session):
+    base_url = resolve_base_url(args, state)
+    task_id = _resolve_task_id(args, session)
+    return _github_mvp0_wait_for_result(state, base_url, task_id, session, args.timeout)
+
+
+def cmd_github_mvp0_cancel(args, state, session):
+    base_url = resolve_base_url(args, state)
+    task_id = _resolve_task_id(args, session)
+    data = cua_auth.authorized_call(
+        state, base_url, "POST", f"/v1/tasks/{task_id}/cancel", retries=IDEMPOTENT_RETRIES
+    )
+    return {"data": {
+        "task_id": task_id,
+        "cancel_requested": True,
+        "outcome": data.get("outcome") if isinstance(data, dict) else None,
+    }}
+
+
+def _github_mvp0_create_task(args, state, session, *, kind, title, objective,
+                             disable_ask_user, metadata, desktop=None):
+    base_url = resolve_base_url(args, state)
+    selected_desktop = desktop if desktop is not None else _github_mvp0_desktop(args, session)
+    body = {"objective": objective, "title": title, "wait_ms": args.wait_ms}
+    if selected_desktop:
+        body["desktop"] = selected_desktop
+    if disable_ask_user:
+        body["disable_ask_user"] = True
+    envelope = cua_auth.authorized_call(
+        state, base_url, "POST", "/v1/tasks", body=body, timeout=_call_timeout(args.wait_ms)
+    )
+    task_id = envelope.get("invocation_id")
+    task_metadata = dict(metadata or {})
+    task_metadata["kind"] = kind
+    task_metadata["desktop"] = _github_mvp0_envelope_desktop(envelope) or selected_desktop
+    if task_id:
+        session.set_github_mvp0_task(task_id, task_metadata)
+    return _github_mvp0_envelope_result(
+        state, base_url, envelope, session, kind=kind, metadata=task_metadata
+    )
+
+
+def _github_mvp0_wait_for_result(state, base_url, task_id, session, timeout):
+    deadline = now_epoch() + max(1, timeout)
+    envelope = None
+    while now_epoch() < deadline:
+        try:
+            envelope = cua_auth.authorized_call(
+                state, base_url, "GET", f"/v1/tasks/{task_id}/result", retries=IDEMPOTENT_RETRIES
+            )
+            if envelope.get("outcome") != "in_progress":
+                break
+            time.sleep(3)
+        except SkillError as exc:
+            if exc.code in RETRYABLE_ERROR_CODES:
+                time.sleep(2)
+                continue
+            raise
+    if envelope is None:
+        envelope = cua_auth.authorized_call(
+            state, base_url, "GET", f"/v1/tasks/{task_id}", retries=IDEMPOTENT_RETRIES
+        )
+    return _github_mvp0_envelope_result(state, base_url, envelope, session)
+
+
+def _github_mvp0_envelope_result(state, base_url, envelope, session, *, kind=None, metadata=None):
+    task_id = envelope.get("invocation_id")
+    if envelope.get("outcome") in TERMINAL_OUTCOMES and task_id and not _envelope_text(envelope):
+        # GET /v1/tasks/{id}, task creation, and task answer may return a thin
+        # terminal projection without final text. MVP0 markers live only in the
+        # authoritative task result, so fetch it before parsing. This mirrors
+        # the generic result command's terminal-envelope handling.
+        envelope = _authoritative_invocation_result(state, base_url, task_id, envelope)
+
+    task_id = envelope.get("invocation_id")
+    stored = session.github_mvp0_task(task_id) if task_id else {}
+    task_metadata = dict(stored)
+    task_metadata.update(metadata or {})
+    resolved_kind = kind or task_metadata.get("kind")
+    desktop = _github_mvp0_envelope_desktop(envelope) or task_metadata.get("desktop")
+    if task_id:
+        task_metadata["kind"] = resolved_kind
+        task_metadata["desktop"] = desktop
+        session.set_github_mvp0_task(task_id, task_metadata)
+
+    outcome = envelope.get("outcome")
+    base = {
+        "task_id": task_id,
+        "outcome": outcome,
+        "status": outcome,
+        "desktop": desktop,
+        "kind": resolved_kind,
+    }
+    script = script_path()
+    if outcome == "in_progress":
+        return {"data": base, "next": {
+            "command": f"python3 {script} github-mvp0 watch --task-id {task_id}",
+            "agent_hint": "The GitHub MVP0 task is still running. Keep watching; do not start a duplicate task.",
+        }}
+    if outcome == "needs_input":
+        if resolved_kind != "connect":
+            raise SkillError(
+                "GITHUB_MVP0_UNEXPECTED_INPUT",
+                "A non-login GitHub MVP0 task requested user input; it cannot continue offline.",
+                task_id=task_id,
+            )
+        request = envelope.get("input_request") or {}
+        auth = cua_github_mvp0.parse_device_auth_request(request.get("question"))
+        data = dict(base)
+        data.update({"status": "needs_user_action", **auth})
+        return {"data": data, "next": {
+            "command": f"python3 {script} github-mvp0 connect --task-id {task_id} --authorized",
+            "agent_hint": "Ask the user to open verification_uri locally and enter user_code. "
+                          "Only after they confirm authorization, run next.command.",
+        }}
+    if outcome == "completed":
+        parsed = cua_github_mvp0.parse_completed_result(
+            _envelope_text(envelope), kind=resolved_kind, expected=task_metadata
+        )
+        data = dict(base)
+        data.update(parsed)
+        if resolved_kind not in ("connect", "status", "logout"):
+            data["status"] = "completed"
+        if resolved_kind in ("connect", "status") and parsed.get("status") == "connected":
+            previous_connection = session.github_mvp0_connection
+            connection = {
+                "status": "connected",
+                "host": "github.com",
+                "login": parsed.get("login"),
+                "git_protocol": "https",
+                "desktop": desktop,
+                "login_task_id": task_id if resolved_kind == "connect" else previous_connection.get("login_task_id"),
+                "verified_task_id": task_id,
+            }
+            session.set_github_mvp0_connection(connection)
+        elif resolved_kind == "status" and parsed.get("status") == "disconnected":
+            session.clear_github_mvp0_connection()
+        elif resolved_kind == "logout":
+            session.clear_github_mvp0_connection()
+        return {"data": data}
+    if outcome == "failed":
+        code = cua_github_mvp0.result_error(_envelope_text(envelope)) or "GITHUB_MVP0_TASK_FAILED"
+        raise SkillError(code, "CUA could not complete the GitHub MVP0 task.", task_id=task_id)
+    if outcome == "cancelled":
+        return {"data": base}
+    raise SkillError("GITHUB_MVP0_RESULT_INVALID", "CUA returned an unknown GitHub MVP0 task outcome.")
+
+
+def _github_mvp0_desktop(args, session):
+    return getattr(args, "desktop", None) or session.github_mvp0_connection.get("desktop")
+
+
+def _github_mvp0_envelope_desktop(envelope):
+    platform = envelope.get("platform") or {}
+    return platform.get("desktop")
 
 
 def _config_sync_apps(value):
@@ -1179,8 +1470,62 @@ def build_parser():
     p.set_defaults(handler=cmd_self_test, action="self-test")
 
     _add_semantic_parsers(sub)
+    _add_github_mvp0_parsers(sub)
 
     return parser
+
+
+def _add_github_mvp0_parsers(sub):
+    github = sub.add_parser(
+        "github-mvp0",
+        help="Experimental direct-GitHub workflow using gh on the bound CUA desktop.",
+    ).add_subparsers(dest="github_mvp0_command")
+
+    p = github.add_parser("doctor", help="Check gh, Git, GitHub auth, and coding-agent availability.")
+    p.add_argument("--agent", choices=["claude-code", "opencode"], default="claude-code")
+    p.add_argument("--desktop", help="Desktop id/name. Defaults to the desktop saved by connect.")
+    p.add_argument("--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS)
+    p.set_defaults(handler=cmd_github_mvp0_doctor, action="github-mvp0 doctor")
+
+    p = github.add_parser("connect", help="Start or finish GitHub CLI device authorization.")
+    p.add_argument("--desktop", help="Desktop id/name. Defaults to the bound desktop.")
+    p.add_argument("--task-id", help="Login task id returned by the first connect call.")
+    p.add_argument("--authorized", action="store_true", help="Confirm the user completed GitHub authorization.")
+    p.add_argument("--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS)
+    p.set_defaults(handler=cmd_github_mvp0_connect, action="github-mvp0 connect")
+
+    p = github.add_parser("status", help="Check GitHub CLI auth on the connected desktop.")
+    p.add_argument("--desktop", help="Desktop id/name. Defaults to the desktop saved by connect.")
+    p.add_argument("--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS)
+    p.set_defaults(handler=cmd_github_mvp0_status, action="github-mvp0 status")
+
+    p = github.add_parser("logout", help="Remove GitHub CLI auth from the connected desktop.")
+    p.add_argument("--desktop", help="Desktop id/name. Defaults to the desktop saved by connect.")
+    p.add_argument("--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS)
+    p.set_defaults(handler=cmd_github_mvp0_logout, action="github-mvp0 logout")
+
+    p = github.add_parser("run", help="Resolve one GitHub Issue and create a Pull Request.")
+    p.add_argument("--issue", required=True, help="Canonical https://github.com/<owner>/<repo>/issues/<n> URL.")
+    p.add_argument("--agent", choices=["claude-code", "opencode"], required=True)
+    p.add_argument("--desktop", help="Desktop id/name. Defaults to the desktop saved by connect.")
+    p.add_argument("--title", help="Optional task title.")
+    p.add_argument("--wait-ms", type=int, default=0, help="Initial server wait in milliseconds.")
+    p.add_argument("--wait", action="store_true", help="Wait for a terminal outcome after task creation.")
+    p.add_argument("--timeout", type=int, default=1800, help="Seconds to wait when --wait is set.")
+    p.set_defaults(handler=cmd_github_mvp0_run, action="github-mvp0 run")
+
+    p = github.add_parser("watch", help="Check a GitHub MVP0 task.")
+    _add_task_args(p)
+    p.set_defaults(handler=cmd_github_mvp0_watch, action="github-mvp0 watch")
+
+    p = github.add_parser("result", help="Wait for a GitHub MVP0 task and parse its structured result.")
+    _add_task_args(p)
+    p.add_argument("--timeout", type=int, default=1800)
+    p.set_defaults(handler=cmd_github_mvp0_result, action="github-mvp0 result")
+
+    p = github.add_parser("cancel", help="Cancel a GitHub MVP0 task.")
+    _add_task_args(p)
+    p.set_defaults(handler=cmd_github_mvp0_cancel, action="github-mvp0 cancel")
 
 
 def _add_semantic_parsers(sub):
